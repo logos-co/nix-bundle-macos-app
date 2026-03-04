@@ -122,6 +122,9 @@ WRAPPER
     # (e) Fix Qt framework bundle structure
     #     Qt frameworks ship without Resources/Info.plist which makes codesign
     #     reject them as "bundle format unrecognized".
+    #     Additionally, codesign requires that the framework root contains only
+    #     symlinks — any real files/dirs (e.g. the binary or Resources/) at the
+    #     root cause "unsealed contents present in the root directory" errors.
     for fw in "$appDir/Frameworks/"*.framework; do
       [ -d "$fw" ] || continue
       fw_name=$(basename "$fw" .framework)
@@ -145,7 +148,26 @@ WRAPPER
 </dict>
 </plist>
 FWEOF
-      if [ ! -e "$fw/Resources" ]; then
+
+      # Ensure Versions/Current -> A symlink exists
+      if [ ! -e "$fw/Versions/Current" ]; then
+        ln -s A "$fw/Versions/Current"
+      fi
+
+      # Replace real binary at framework root with a symlink into Versions/Current/
+      # A real file here causes "unsealed contents present in the root directory".
+      if [ -e "$fw/$fw_name" ] && [ ! -L "$fw/$fw_name" ]; then
+        rm -f "$fw/$fw_name"
+        ln -s "Versions/Current/$fw_name" "$fw/$fw_name"
+      elif [ ! -e "$fw/$fw_name" ]; then
+        ln -s "Versions/Current/$fw_name" "$fw/$fw_name"
+      fi
+
+      # Replace real Resources dir at framework root with a symlink into Versions/Current/
+      if [ -d "$fw/Resources" ] && [ ! -L "$fw/Resources" ]; then
+        rm -rf "$fw/Resources"
+        ln -s "Versions/Current/Resources" "$fw/Resources"
+      elif [ ! -e "$fw/Resources" ]; then
         ln -s "Versions/Current/Resources" "$fw/Resources"
       fi
     done
