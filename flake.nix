@@ -2,7 +2,8 @@
   description = "Bundle Nix derivations into macOS .app bundles";
 
   inputs = {
-    nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
+    logos-nix.url = "github:logos-co/logos-nix";
+    nixpkgs.follows = "logos-nix/nixpkgs";
     nix-bundle-dir = {
       url = "github:logos-co/nix-bundle-dir";
       inputs.nixpkgs.follows = "nixpkgs";
