@@ -10,7 +10,7 @@
     };
   };
 
-  outputs = { self, nixpkgs, nix-bundle-dir }:
+  outputs = { self, logos-nix, nixpkgs, nix-bundle-dir }:
     let
       systems = [ "aarch64-darwin" "x86_64-darwin" ];
       forAllSystems = f: nixpkgs.lib.genAttrs systems (system: f {
