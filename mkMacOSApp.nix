@@ -106,6 +106,10 @@ WRAPPER
     # (c) Fix @loader_path references in Resources/qt dylibs
     #     After moving from Frameworks/ to Resources/, the @loader_path refs in
     #     Qt plugin dylibs still point relative to Frameworks/. Rewrite them.
+    #     Non-Qt apps (e.g. plain CLI bundles) have no Resources/qt tree, so
+    #     guard on its existence — an unguarded `find` on a missing dir exits
+    #     non-zero and aborts the build under `set -e`.
+    if [ -d "$appDir/Resources/qt" ]; then
     find "$appDir/Resources/qt" -name "*.dylib" -type f | while read -r dylib; do
       otool -L "$dylib" 2>/dev/null | grep '@loader_path' | awk '{print $1}' | while read -r dep; do
         lib_name=$(basename "$dep")
@@ -115,6 +119,7 @@ WRAPPER
         install_name_tool -change "$dep" "$new_path" "$dylib" 2>/dev/null || true
       done
     done
+    fi
 
     # (d) Remove static libraries from Frameworks/
     find "$appDir/Frameworks" -name "*.a" -delete
