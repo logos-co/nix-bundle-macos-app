@@ -1,0 +1,49 @@
+name: CI
+
+# This repo had no automated gate at all, which is a poor fit for what it does:
+# it produces the .app a user double-clicks, and its failure modes are exactly
+# the ones `nix build` cannot see.  The derivation succeeds whether or not the
+# executable ends up where Info.plist says it is, whether or not the plist
+# parses, and — the one that actually ships — whether or not the binaries still
+# resolve their libraries out of /nix/store, which works on every machine that
+# built them and on no machine that did not.
+#
+# tests/smoke.sh builds an .app from nixpkgs#hello and asserts that contract,
+# then runs it.  It must run on a real macOS runner: otool, plutil, PlistBuddy,
+# codesign and the ability to exec a Mach-O are all part of what is being
+# checked, and none of them exist on Linux.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  smoke:
+    name: .app contract (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        # macos-latest is arm64.  x86_64-darwin is also a declared system for
+        # this flake; covering it needs an Intel runner label, which GitHub is
+        # in the process of retiring, so it is left out rather than pinned to a
+        # label that will disappear.
+        os: [macos-latest]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      # cachix/install-nix-action fails on current macos-latest runners
+      # (_nixbld1 already exists). Same choice basecamp and the design-system
+      # made for their Darwin jobs.
+      - uses: DeterminateSystems/nix-installer-action@v22
+
+      - uses: cachix/cachix-action@v15
+        with:
+          name: logos-co
+          authToken: '${{ secrets.CACHIX_AUTH_TOKEN }}'
+        continue-on-error: true   # a fork without the secret still gets to run
+
+      - name: .app contract
+        run: bash tests/smoke.sh .
