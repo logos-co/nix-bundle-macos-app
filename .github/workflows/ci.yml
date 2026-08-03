@@ -34,10 +34,10 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - uses: cachix/install-nix-action@v27
-        with:
-          extra_nix_config: |
-            experimental-features = nix-command flakes
+      # cachix/install-nix-action fails on current macos-latest runners
+      # (_nixbld1 already exists). Same choice basecamp and the design-system
+      # made for their Darwin jobs.
+      - uses: DeterminateSystems/nix-installer-action@v22
 
       - uses: cachix/cachix-action@v15
         with:
