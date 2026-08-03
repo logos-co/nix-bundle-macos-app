@@ -48,6 +48,36 @@ check(){ if eval "$2" >/dev/null 2>&1; then ok "$1"; else bad "$1" "${3:-}"; fi;
 
 SYSTEM="$(nix eval --impure --raw --expr builtins.currentSystem)"
 
+# Print any dependency of $1 that does NOT land on a file inside the bundle.
+# Names are resolved the way dyld would: @loader_path / @executable_path
+# against the Mach-O's own directory, @rpath against each LC_RPATH.  Real
+# system libraries are skipped.  (Note for the next reader: this is a function
+# rather than an inline $( ) block because bash 3.2 — still what macOS and the
+# GitHub macOS runners ship — mis-parses `case` inside command substitution.)
+unresolved_deps() {
+  local macho="$1" dir dep rp try cand
+  dir="$(dirname "$macho")"
+  otool -L "$macho" | tail -n +2 | awk '{print $1}' | while IFS= read -r dep; do
+    cand=""
+    case "$dep" in
+      /usr/lib/*|/System/*) continue ;;
+      @loader_path/*)     cand="$dir/${dep#@loader_path/}" ;;
+      @executable_path/*) cand="$dir/${dep#@executable_path/}" ;;
+      @rpath/*)
+        for rp in $(otool -l "$macho" | awk '/LC_RPATH/{f=1} f && $1=="path"{print $2; f=0}'); do
+          case "$rp" in
+            @loader_path*)     try="$dir/${rp#@loader_path}/${dep#@rpath/}" ;;
+            @executable_path*) try="$dir/${rp#@executable_path}/${dep#@rpath/}" ;;
+            *)                 try="$rp/${dep#@rpath/}" ;;
+          esac
+          if [ -e "$try" ]; then cand="$try"; break; fi
+        done
+        ;;
+    esac
+    if [ -z "$cand" ] || [ ! -e "$cand" ]; then echo "$dep"; fi
+  done
+}
+
 # Wrap nixpkgs#hello into an .app using one of nix-bundle-dir's bundlers.
 build_app() {  # <nix-bundle-dir bundler attr> <out-link>
   nix build --impure --print-build-logs -o "$2" --expr "
@@ -84,7 +114,10 @@ C="$APP/Contents"
 
 # CFBundleExecutable is what launchd actually execs; read it rather than
 # assuming, so a plist/layout mismatch shows up here instead of in Finder.
-EXEC="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleExecutable' "$C/Info.plist" 2>/dev/null)"
+EXEC="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleExecutable' "$C/Info.plist" 2>/dev/null)" || EXEC=""
+# PlistBuddy prints its complaint on stdout and still exits 0 for some errors,
+# so treat anything that is not a plain file name as "unreadable".
+[ -n "$EXEC" ] && [ -e "$C/MacOS/$EXEC" ] || EXEC="<unreadable>"
 
 echo
 echo "== bundle contract =="
@@ -141,14 +174,24 @@ echo "== linking layout =="
 # @loader_path/../lib resolves from Contents/MacOS.
 check "Contents/lib -> Frameworks symlink is present" \
       "[ -L '$C/lib' ] && [ -d '$C/lib' ]"
-check "the program's dylib deps resolve inside the bundle" \
+check "every dylib dep is expressed relative to the binary" \
       "! otool -L '$MACHO' | tail -n +2 | grep -vqE '@loader_path|@executable_path|@rpath|/usr/lib/|/System/'" \
       "$(otool -L "$MACHO" | tail -n +2 | grep -vE '@loader_path|@executable_path|@rpath|/usr/lib/|/System/' | head -1)"
+# ...and that each of those relative names actually lands on a file that is in
+# the bundle.  Naming alone proves nothing: with Contents/lib missing, dyld
+# silently falls back to the shared cache's /usr/lib/libiconv.2.dylib and the
+# app still prints its greeting on THIS mac while being broken for a user
+# whose system copy differs or does not exist.  Measured, not theoretical —
+# deleting the lib -> Frameworks symlink leaves the run check green.
+unresolved="$(unresolved_deps "$MACHO")"
+check "every dylib dep resolves to a file inside the .app" \
+      "[ -z \"\$unresolved\" ]" \
+      "unresolved: $(printf '%s' "$unresolved" | tr '\n' ' ')"
 # nix-bundle-dir now also gives every Mach-O a bare @loader_path rpath, so a
 # plugin staged outside Contents/Frameworks still finds the companion dylibs
 # sitting next to it.  Absent => the pinned nix-bundle-dir predates that fix.
 check "LC_RPATH includes a bare @loader_path (sibling-dylib lookup)" \
-      "otool -l '$MACHO' | grep -A2 LC_RPATH | grep -qE 'path @loader_path\$'" \
+      "otool -l '$MACHO' | awk '/LC_RPATH/{f=1} f && \$1==\"path\"{print \$2; f=0}' | grep -qx '@loader_path'" \
       "rpaths: $(otool -l "$MACHO" | grep -A2 LC_RPATH | grep 'path ' | tr -s ' ' | paste -sd, -)"
 
 echo
